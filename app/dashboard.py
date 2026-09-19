@@ -25,9 +25,8 @@ def dashboard(db: Session = Depends(get_db)):
         status == "label_created_awaiting_fedex"
         for status in statuses.values()
     )
-    in_transit = sum(
-        status in {"picked_up", "accepted", "in_transit", "out_for_delivery"}
-        for status in statuses.values()
+    complete = sum(
+        status == "complete" for status in statuses.values()
     )
     needs_attention = sum(
         status in {"label_overdue", "fedex_scan_overdue", "exception"}
@@ -43,7 +42,7 @@ def dashboard(db: Session = Depends(get_db)):
             status_class = "danger"
         elif status in {"awaiting_label", "label_created_awaiting_fedex"}:
             status_class = "warning"
-        elif status == "delivered":
+        elif status == "complete":
             status_class = "success"
         else:
             status_class = "active"
@@ -203,8 +202,8 @@ def dashboard(db: Session = Depends(get_db)):
             </div>
 
             <div class="card">
-                <div class="card-number">{in_transit}</div>
-                <div class="card-label">In Transit</div>
+                <div class="card-number">{complete}</div>
+                <div class="card-label">Complete</div>
             </div>
 
             <div class="card">
