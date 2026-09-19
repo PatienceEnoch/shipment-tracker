@@ -34,7 +34,6 @@ class ShipmentOrder(Base):
     last_event: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
-
 class AlertNotification(Base):
     __tablename__ = "alert_notifications"
 
@@ -42,5 +41,19 @@ class AlertNotification(Base):
     sales_order: Mapped[str] = mapped_column(String(64), index=True)
     alert_type: Mapped[str] = mapped_column(String(64))
     sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+
+
+class ProcessedEmail(Base):
+    __tablename__ = "processed_emails"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    message_key: Mapped[str] = mapped_column(
+        String(255), unique=True, index=True
+    )
+    status: Mapped[str] = mapped_column(String(32))
+    detail: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    processed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
     )
