@@ -10,10 +10,11 @@ enforces two 72-hour deadlines, and accepts carrier scan events.
 3. If no tracking number is attached within 72 hours, the order becomes `label_overdue`.
 4. A later email containing the same sales order and a tracking number updates the order.
 5. If FedEx does not scan the package within 72 hours of the label being recorded, the order becomes `fedex_scan_overdue`.
-6. FedEx webhook events update the shipment to `in_transit`, `exception`, or `delivered`.
+6. The first FedEx event that proves the carrier has possession marks the order `complete`.
+7. Once complete, the tracker stops caring about later transit or delivery events.
 
-The first version uses a simulated carrier webhook so the workflow can be tested before connecting
-a production FedEx developer account.
+The first version uses a simulated FedEx event endpoint so the workflow can be tested before connecting
+FedEx's production tracking API.
 
 ## Run locally
 
@@ -68,7 +69,8 @@ curl -X POST http://127.0.0.1:8000/webhooks/fedex \
   }'
 ```
 
-Then try `in_transit`, `exception`, or `delivered`.
+A possession event such as `picked_up` marks the order `complete`. The tracker is intentionally
+concerned only with whether FedEx acquired the package, not the customer's delivery journey.
 
 ## Test
 
