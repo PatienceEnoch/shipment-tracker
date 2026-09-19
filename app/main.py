@@ -1,23 +1,27 @@
 import asyncio
-
-from dotenv import load_dotenv
-
-load_dotenv()
 from datetime import datetime, timezone
 
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .dashboard import router as dashboard_router
 from .alerts import build_alerts, mark_alert_sent
+from .dashboard import router as dashboard_router
 from .db import Base, engine, get_db
 from .email_sender import send_email
+from .gmail_reader import gmail_intake_monitor, process_gmail_once
 from .models import ShipmentOrder
 from .monitor import alert_monitor
 from .schemas import EmailPayload, FedExEvent
-from .services.email_parser import parse_email
+from .services.ingest import (
+    MissingSalesOrderError,
+    TrackingConflictError,
+    ingest_email_content,
+)
 from .services.status import effective_status
+
+load_dotenv()
 
 Base.metadata.create_all(bind=engine)
 
@@ -54,54 +58,16 @@ def health() -> dict:
 
 @app.post("/ingest/email")
 def ingest_email(payload: EmailPayload, db: Session = Depends(get_db)) -> dict:
-    parsed = parse_email(payload.subject, payload.text)
-
-    if not parsed.sales_order:
-        raise HTTPException(
-            status_code=422,
-            detail="Could not find a sales order number in the email.",
+    try:
+        parsed, order = ingest_email_content(
+            db,
+            subject=payload.subject,
+            text=payload.text,
         )
-
-    order = db.scalar(
-        select(ShipmentOrder).where(
-            ShipmentOrder.sales_order == parsed.sales_order
-        )
-    )
-
-    now = datetime.now(timezone.utc)
-
-    if order is None:
-        order = ShipmentOrder(sales_order=parsed.sales_order)
-        db.add(order)
-        db.flush()
-
-    if parsed.tracking_number:
-        existing = db.scalar(
-            select(ShipmentOrder).where(
-                ShipmentOrder.tracking_number == parsed.tracking_number,
-                ShipmentOrder.id != order.id,
-            )
-        )
-        if existing:
-            raise HTTPException(
-                status_code=409,
-                detail="Tracking number is already assigned to another sales order.",
-            )
-
-        if not order.tracking_number:
-            order.tracking_number = parsed.tracking_number
-            order.label_recorded_at = now
-        elif order.tracking_number != parsed.tracking_number:
-            raise HTTPException(
-                status_code=409,
-                detail="Sales order already has a different tracking number.",
-            )
-
-        if order.first_fedex_scan_at is None:
-            order.status = "label_created_awaiting_fedex"
-
-    db.commit()
-    db.refresh(order)
+    except MissingSalesOrderError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except TrackingConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return {
         "parsed": {
@@ -110,6 +76,11 @@ def ingest_email(payload: EmailPayload, db: Session = Depends(get_db)) -> dict:
         },
         "order": serialize_order(order),
     }
+
+
+@app.post("/gmail/check-now")
+def gmail_check_now() -> dict:
+    return process_gmail_once()
 
 
 @app.post("/webhooks/fedex")
@@ -234,19 +205,22 @@ def send_pending_alerts(
     return results
 
 
-_monitor_task = None
+_alert_task = None
+_gmail_task = None
 
 
 @app.on_event("startup")
-async def start_shipment_monitor():
-    global _monitor_task
-    _monitor_task = asyncio.create_task(alert_monitor())
+async def start_background_tasks():
+    global _alert_task, _gmail_task
+
+    _alert_task = asyncio.create_task(alert_monitor())
+    _gmail_task = asyncio.create_task(gmail_intake_monitor())
 
 
 @app.on_event("shutdown")
-async def stop_shipment_monitor():
-    global _monitor_task
+async def stop_background_tasks():
+    global _alert_task, _gmail_task
 
-    if _monitor_task:
-        _monitor_task.cancel()
-
+    for task in (_alert_task, _gmail_task):
+        if task:
+            task.cancel()
