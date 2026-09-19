@@ -1,79 +1,109 @@
 # Shipment Tracker
 
-A small shipment-monitoring service that matches sales orders to FedEx tracking numbers,
-enforces two 72-hour deadlines, and accepts carrier scan events.
+A Python service built around a real operations problem: knowing whether a sales order actually progressed from **order created** to **shipping label created** to **carrier has the package**.
 
-## Version 1 workflow
+The tracker watches those handoffs and raises an alert when either one takes longer than 72 hours.
 
-1. A sales-order email arrives.
-2. The app extracts the sales order number and creates the order.
-3. If no tracking number is attached within 72 hours, the order becomes `label_overdue`.
-4. A later email containing the same sales order and a tracking number updates the order.
-5. If FedEx does not scan the package within 72 hours of the label being recorded, the order becomes `fedex_scan_overdue`.
-6. The first FedEx event that proves the carrier has possession marks the order `complete`.
-7. Once complete, the tracker stops caring about later transit or delivery events.
+## The workflow
 
-The first version uses a simulated FedEx event endpoint so the workflow can be tested before connecting
-FedEx's production tracking API.
+~~~text
+Sales-order email
+      |
+Order created
+      |
+72-hour label clock
+      |
+Tracking number recorded
+      |
+72-hour carrier-scan clock
+      |
+FedEx possession event
+      |
+Complete
+~~~
+
+The application stops tracking after the first carrier event that proves FedEx has possession. It is intentionally focused on the business handoff to the carrier rather than the customer's full delivery journey.
+
+## What is implemented
+
+- FastAPI application and API endpoints
+- SQLite persistence with SQLAlchemy
+- Sales-order and tracking-number parsing
+- Gmail/IMAP intake support
+- Email alert delivery with dry-run support
+- 72-hour label and carrier-scan deadlines
+- Alert deduplication
+- Browser dashboard
+- Automated monitoring loop
+- Simulated FedEx webhook for possession events
+- pytest coverage
+- GitHub Actions
+
+## Current limitation
+
+The FedEx side is still simulated.
+
+A webhook such as:
+
+~~~json
+{
+  "tracking_number": "784512345678",
+  "event": "picked_up"
+}
+~~~
+
+can mark an order complete, which lets me validate the end-to-end state machine before replacing that simulated event with the production FedEx tracking integration.
+
+## State model
+
+An order can move through states such as:
+
+~~~text
+awaiting_label
+      |
+label_recorded
+      |
+awaiting_fedex_scan
+      |
+complete
+~~~
+
+If a deadline is exceeded, the tracker surfaces the appropriate overdue condition rather than silently losing the order in the workflow.
 
 ## Run locally
 
-```bash
+~~~bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload
-```
+~~~
 
-Open:
+Useful local endpoints:
 
 - API docs: http://127.0.0.1:8000/docs
 - Health check: http://127.0.0.1:8000/health
 - Orders: http://127.0.0.1:8000/orders
 - Overdue alerts: http://127.0.0.1:8000/alerts/overdue
 
-## Example: sales-order email
+## Configuration
 
-```bash
-curl -X POST http://127.0.0.1:8000/ingest/email \
-  -H "Content-Type: application/json" \
-  -d '{
-    "sender": "sales@example.com",
-    "subject": "Sales Order 105482",
-    "text": "Sales Order: 105482",
-    "message_id": "message-001"
-  }'
-```
+The repository includes `.env.example` for SMTP, IMAP/Gmail intake, alert intervals, and dry-run behavior.
 
-## Example: label email
-
-```bash
-curl -X POST http://127.0.0.1:8000/ingest/email \
-  -H "Content-Type: application/json" \
-  -d '{
-    "sender": "shipping@example.com",
-    "subject": "Tracking for Sales Order 105482",
-    "text": "Sales Order: 105482\nFedEx Tracking: 784512345678",
-    "message_id": "message-002"
-  }'
-```
-
-## Example: simulated FedEx scan
-
-```bash
-curl -X POST http://127.0.0.1:8000/webhooks/fedex \
-  -H "Content-Type: application/json" \
-  -d '{
-    "tracking_number": "784512345678",
-    "event": "picked_up"
-  }'
-```
-
-A possession event such as `picked_up` marks the order `complete`. The tracker is intentionally
-concerned only with whether FedEx acquired the package, not the customer's delivery journey.
+I keep secrets out of the repository and use environment variables for runtime credentials.
 
 ## Test
 
-```bash
+~~~bash
 pytest
-```
+~~~
+
+## Why I built it
+
+This project came from a real workflow where the important question was not "where is the package right now?"
+
+It was:
+
+> **Did the order make it through the handoffs that are our responsibility?**
+
+That pushed me to think in terms of state, deadlines, idempotent alerts, external events, and operational visibility instead of just building another CRUD application.
