@@ -12,23 +12,14 @@ from sqlalchemy import select
 from .db import SessionLocal
 from .models import ProcessedEmail
 from .services.ingest import (
-    MissingSalesOrderError,
     TrackingConflictError,
     ingest_email_content,
 )
 
 
-def _extract_text(raw_message: bytes) -> tuple[str, str, str]:
+def _extract_text(raw_message: bytes) -> tuple[str, str]:
     message = BytesParser(policy=policy.default).parsebytes(raw_message)
     subject = str(message.get("Subject", ""))
-
-    recipient_headers = [
-        str(message.get("To", "")),
-        str(message.get("Delivered-To", "")),
-        str(message.get("X-Original-To", "")),
-        str(message.get("Envelope-To", "")),
-    ]
-    recipients = "\n".join(value for value in recipient_headers if value)
 
     body = message.get_body(preferencelist=("plain", "html"))
 
@@ -41,7 +32,7 @@ def _extract_text(raw_message: bytes) -> tuple[str, str, str]:
             text = html.unescape(re.sub(r"<[^>]+>", " ", text))
             text = re.sub(r"\s+", " ", text).strip()
 
-    return subject, recipients, text
+    return subject, text
 
 
 def _message_key(raw_message: bytes) -> str:
@@ -61,14 +52,16 @@ def process_gmail_once() -> dict:
             "checked": 0,
             "matched": 0,
             "processed": 0,
-            "ignored": 0,
             "errors": 0,
         }
 
-    intake_address = os.getenv("GMAIL_INTAKE_ADDRESS")
     gmail_user = os.getenv("GMAIL_USER") or os.getenv("SMTP_USER")
     gmail_password = os.getenv("GMAIL_APP_PASSWORD") or os.getenv(
         "SMTP_PASSWORD"
+    )
+    subject_prefix = os.getenv(
+        "GMAIL_INTAKE_SUBJECT_PREFIX",
+        "[Shipment Tracker]",
     )
     imap_host = os.getenv("IMAP_HOST", "imap.gmail.com")
     imap_port = int(os.getenv("IMAP_PORT", "993"))
@@ -76,7 +69,6 @@ def process_gmail_once() -> dict:
     missing = [
         name
         for name, value in {
-            "GMAIL_INTAKE_ADDRESS": intake_address,
             "GMAIL_USER/SMTP_USER": gmail_user,
             "GMAIL_APP_PASSWORD/SMTP_PASSWORD": gmail_password,
         }.items()
@@ -91,7 +83,6 @@ def process_gmail_once() -> dict:
     checked = 0
     matched = 0
     processed = 0
-    ignored = 0
     errors = 0
 
     with imaplib.IMAP4_SSL(imap_host, imap_port) as client:
@@ -130,9 +121,9 @@ def process_gmail_once() -> dict:
                 errors += 1
                 continue
 
-            subject, recipients, body = _extract_text(raw_message)
+            subject, body = _extract_text(raw_message)
 
-            if intake_address.lower() not in recipients.lower():
+            if not subject.lower().startswith(subject_prefix.lower()):
                 continue
 
             matched += 1
@@ -148,39 +139,51 @@ def process_gmail_once() -> dict:
                 if already_processed:
                     continue
 
-                record = ProcessedEmail(
-                    message_key=key,
-                    status="processed",
-                )
-                db.add(record)
-
                 try:
                     ingest_email_content(
                         db,
                         subject=subject,
                         text=body,
                     )
-                    processed += 1
-                except MissingSalesOrderError as exc:
-                    record.status = "ignored"
-                    record.detail = str(exc)
+
+                    db.add(
+                        ProcessedEmail(
+                            message_key=key,
+                            status="processed",
+                        )
+                    )
                     db.commit()
-                    ignored += 1
+                    processed += 1
+
                 except TrackingConflictError as exc:
-                    record.status = "error"
-                    record.detail = str(exc)
+                    db.rollback()
+                    db.add(
+                        ProcessedEmail(
+                            message_key=key,
+                            status="error",
+                            detail=str(exc),
+                        )
+                    )
                     db.commit()
                     errors += 1
-                except Exception:
+
+                except Exception as exc:
                     db.rollback()
-                    raise
+                    db.add(
+                        ProcessedEmail(
+                            message_key=key,
+                            status="error",
+                            detail=str(exc),
+                        )
+                    )
+                    db.commit()
+                    errors += 1
 
     return {
         "enabled": True,
         "checked": checked,
         "matched": matched,
         "processed": processed,
-        "ignored": ignored,
         "errors": errors,
     }
 
@@ -198,7 +201,6 @@ async def gmail_intake_monitor() -> None:
                     f"checked={result['checked']} "
                     f"matched={result['matched']} "
                     f"processed={result['processed']} "
-                    f"ignored={result['ignored']} "
                     f"errors={result['errors']}"
                 )
 
