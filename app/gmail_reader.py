@@ -21,7 +21,14 @@ from .services.ingest import (
 def _extract_text(raw_message: bytes) -> tuple[str, str, str]:
     message = BytesParser(policy=policy.default).parsebytes(raw_message)
     subject = str(message.get("Subject", ""))
-    recipient = str(message.get("To", ""))
+
+    recipient_headers = [
+        str(message.get("To", "")),
+        str(message.get("Delivered-To", "")),
+        str(message.get("X-Original-To", "")),
+        str(message.get("Envelope-To", "")),
+    ]
+    recipients = "\n".join(value for value in recipient_headers if value)
 
     body = message.get_body(preferencelist=("plain", "html"))
 
@@ -34,7 +41,7 @@ def _extract_text(raw_message: bytes) -> tuple[str, str, str]:
             text = html.unescape(re.sub(r"<[^>]+>", " ", text))
             text = re.sub(r"\s+", " ", text).strip()
 
-    return subject, recipient, text
+    return subject, recipients, text
 
 
 def _message_key(raw_message: bytes) -> str:
@@ -49,7 +56,14 @@ def _message_key(raw_message: bytes) -> str:
 
 def process_gmail_once() -> dict:
     if os.getenv("GMAIL_INTAKE_ENABLED", "false").lower() != "true":
-        return {"enabled": False, "processed": 0, "ignored": 0, "errors": 0}
+        return {
+            "enabled": False,
+            "checked": 0,
+            "matched": 0,
+            "processed": 0,
+            "ignored": 0,
+            "errors": 0,
+        }
 
     intake_address = os.getenv("GMAIL_INTAKE_ADDRESS")
     gmail_user = os.getenv("GMAIL_USER") or os.getenv("SMTP_USER")
@@ -74,6 +88,8 @@ def process_gmail_once() -> dict:
             "Missing Gmail intake configuration: " + ", ".join(missing)
         )
 
+    checked = 0
+    matched = 0
     processed = 0
     ignored = 0
     errors = 0
@@ -82,11 +98,7 @@ def process_gmail_once() -> dict:
         client.login(gmail_user, gmail_password)
         client.select("INBOX")
 
-        status, data = client.search(
-            None,
-            "TO",
-            f'"{intake_address}"',
-        )
+        status, data = client.search(None, "ALL")
 
         if status != "OK":
             raise RuntimeError("Gmail IMAP search failed.")
@@ -94,6 +106,8 @@ def process_gmail_once() -> dict:
         message_numbers = data[0].split()[-100:]
 
         for message_number in message_numbers:
+            checked += 1
+
             status, message_data = client.fetch(
                 message_number,
                 "(BODY.PEEK[])",
@@ -116,6 +130,12 @@ def process_gmail_once() -> dict:
                 errors += 1
                 continue
 
+            subject, recipients, body = _extract_text(raw_message)
+
+            if intake_address.lower() not in recipients.lower():
+                continue
+
+            matched += 1
             key = _message_key(raw_message)
 
             with SessionLocal() as db:
@@ -126,11 +146,6 @@ def process_gmail_once() -> dict:
                 )
 
                 if already_processed:
-                    continue
-
-                subject, recipient, body = _extract_text(raw_message)
-
-                if intake_address.lower() not in recipient.lower():
                     continue
 
                 record = ProcessedEmail(
@@ -162,6 +177,8 @@ def process_gmail_once() -> dict:
 
     return {
         "enabled": True,
+        "checked": checked,
+        "matched": matched,
         "processed": processed,
         "ignored": ignored,
         "errors": errors,
@@ -178,6 +195,8 @@ async def gmail_intake_monitor() -> None:
             if result["enabled"]:
                 print(
                     "[gmail-intake] "
+                    f"checked={result['checked']} "
+                    f"matched={result['matched']} "
                     f"processed={result['processed']} "
                     f"ignored={result['ignored']} "
                     f"errors={result['errors']}"
