@@ -35,6 +35,18 @@ def _extract_text(raw_message: bytes) -> tuple[str, str]:
     return subject, text
 
 
+def _subject_is_candidate(subject: str, subject_prefix: str) -> bool:
+    normalized = subject.strip().lower()
+
+    if normalized.startswith(subject_prefix.lower()):
+        return True
+
+    return (
+        normalized.startswith("sales order ")
+        or normalized.startswith("tracking for sales order ")
+    )
+
+
 def _message_key(raw_message: bytes) -> str:
     message = BytesParser(policy=policy.default).parsebytes(raw_message)
     message_id = str(message.get("Message-ID", "")).strip()
@@ -123,7 +135,7 @@ def process_gmail_once() -> dict:
 
             subject, body = _extract_text(raw_message)
 
-            if not subject.lower().startswith(subject_prefix.lower()):
+            if not _subject_is_candidate(subject, subject_prefix):
                 continue
 
             matched += 1
