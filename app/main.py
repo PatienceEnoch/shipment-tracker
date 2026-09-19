@@ -98,16 +98,22 @@ def fedex_webhook(event: FedExEvent, db: Session = Depends(get_db)) -> dict:
         )
 
     normalized = event.event.strip().lower().replace(" ", "_")
-    allowed = {
+    acquired_events = {
         "picked_up",
         "accepted",
         "in_transit",
-        "exception",
         "out_for_delivery",
         "delivered",
     }
 
-    if normalized not in allowed:
+    if normalized == "exception":
+        order.last_event = normalized
+        order.status = "exception"
+        db.commit()
+        db.refresh(order)
+        return {"order": serialize_order(order)}
+
+    if normalized not in acquired_events:
         raise HTTPException(
             status_code=422,
             detail=f"Unsupported FedEx event: {event.event}",
@@ -119,7 +125,7 @@ def fedex_webhook(event: FedExEvent, db: Session = Depends(get_db)) -> dict:
         order.first_fedex_scan_at = now
 
     order.last_event = normalized
-    order.status = normalized
+    order.status = "complete"
 
     if normalized == "delivered":
         order.delivered_at = now
