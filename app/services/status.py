@@ -14,14 +14,14 @@ def _aware(value: datetime) -> datetime:
 def effective_status(order: ShipmentOrder, now: datetime | None = None) -> str:
     now = now or datetime.now(timezone.utc)
 
-    if order.status == "delivered":
-        return "delivered"
+    if order.status == "complete":
+        return "complete"
 
     if order.status == "exception":
         return "exception"
 
     if order.first_fedex_scan_at:
-        return order.status
+        return "complete"
 
     if order.tracking_number and order.label_recorded_at:
         if now - _aware(order.label_recorded_at) >= DEADLINE:
