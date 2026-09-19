@@ -27,7 +27,7 @@ def test_fedex_scan_becomes_overdue_after_72_hours():
     assert effective_status(order, now=now) == "fedex_scan_overdue"
 
 
-def test_scan_stops_second_timer():
+def test_scan_stops_second_timer_and_completes_order():
     now = datetime.now(timezone.utc)
     order = ShipmentOrder(
         sales_order="10003",
@@ -35,7 +35,7 @@ def test_scan_stops_second_timer():
         created_at=now - timedelta(hours=100),
         label_recorded_at=now - timedelta(hours=90),
         first_fedex_scan_at=now - timedelta(hours=85),
-        status="in_transit",
+        status="complete",
     )
 
-    assert effective_status(order, now=now) == "in_transit"
+    assert effective_status(order, now=now) == "complete"
