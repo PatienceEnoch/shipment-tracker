@@ -28,10 +28,10 @@ The application stops tracking after the first carrier event that proves FedEx h
 
 - FastAPI application and API endpoints
 - SQLite persistence with SQLAlchemy
-- Sales-order and tracking-number parsing
+- Sales order and tracking number parsing
 - Gmail/IMAP intake support
-- Email alert delivery with dry-run support
-- 72-hour label and carrier-scan deadlines
+- Email alert delivery with dry run support
+- 72 hour label and carrier scan deadlines
 - Alert deduplication
 - Browser dashboard
 - Automated monitoring loop
@@ -52,7 +52,7 @@ A webhook such as:
 }
 ~~~
 
-can mark an order complete, which lets me validate the end-to-end state machine before replacing that simulated event with the production FedEx tracking integration.
+can mark an order complete, which lets me validate the end to end state machine before replacing that simulated event with the production FedEx tracking integration.
 
 ## State model
 
@@ -88,7 +88,7 @@ Useful local endpoints:
 
 ## Configuration
 
-The repository includes `.env.example` for SMTP, IMAP/Gmail intake, alert intervals, and dry-run behavior.
+The repository includes `.env.example` for SMTP, IMAP/Gmail intake, alert intervals, and dry run behavior.
 
 I keep secrets out of the repository and use environment variables for runtime credentials.
 
